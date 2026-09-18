@@ -412,5 +412,5 @@ const MENU = {
   /* ======================= ORDER LOG =======================
      The Google Apps Script web app URL (ends in /exec). Every order is
      sent here when the student taps Pay. Leave it empty to turn logging off. */
-  orderLogUrl: "",
+  orderLogUrl: "https://script.google.com/macros/s/AKfycbxz7vbp8ZsSA8KMuL9yXDB_QWT56TOxVWgCrBQbCw33wL0q2jFaF7hFoYZG4Kh0o1I/exec",
 };

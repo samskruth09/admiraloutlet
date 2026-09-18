@@ -50,14 +50,11 @@ function doGet() {
   return ContentService.createTextOutput('Admiral Outlet order log is running.');
 }
 
-// Run once by hand: creates both tabs, headers, formats, and sets the time zone.
+// Optional: creates both tabs right away instead of on the first order.
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.setSpreadsheetTimeZone(TIME_ZONE);
   sheet_(ss, ORDERS, ORDER_HEADERS);
   sheet_(ss, CHOICES, CHOICE_HEADERS);
-  var blank = ss.getSheetByName('Sheet1');
-  if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
 }
 
 /* ---------- helpers ---------- */
@@ -65,6 +62,8 @@ function setup() {
 function sheet_(ss, name, headers) {
   var sh = ss.getSheetByName(name);
   if (!sh) {
+    // first order ever: do what `setup` would have done
+    if (ss.getSpreadsheetTimeZone() !== TIME_ZONE) ss.setSpreadsheetTimeZone(TIME_ZONE);
     sh = ss.insertSheet(name);
     sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sh.setFrozenRows(1);
@@ -72,6 +71,8 @@ function sheet_(ss, name, headers) {
     var priceCol = headers.indexOf(name === ORDERS ? 'Total' : 'Price') + 1;
     sh.getRange(1, priceCol, sh.getMaxRows(), 1).setNumberFormat('$0.00');
     sh.getRange(1, 1, 1, headers.length).setNumberFormat('@');
+    var blank = ss.getSheetByName('Sheet1');
+    if (blank && blank.getLastRow() === 0) ss.deleteSheet(blank);
   }
   return sh;
 }
