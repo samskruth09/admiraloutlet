@@ -5,12 +5,16 @@
   "use strict";
 
   var MAX_LAYERS = 6;
+  var LAST_ORDER_KEY = "ao-last-order";
+  var LAST_ORDER_HOURS = 4;
 
   var state = {
     category: null,
     picks: {},   // stepId -> optionId (single) | [optionIds] (multi)
     name: "",
-    orderNo: ""
+    sending: false,
+    // live controls from the order-log Sheet; open until told otherwise
+    status: { accepting: true, message: "", soldOut: {} }
   };
 
   var el = {
@@ -26,8 +30,13 @@
     pay: document.getElementById("pay"),
     payLabel: document.getElementById("pay-label"),
     hours: document.getElementById("outlet-hours"),
+    footHours: document.getElementById("foot-hours"),
     pickup: document.getElementById("foot-pickup"),
     closed: document.getElementById("closed-banner"),
+    lastOrder: document.getElementById("last-order"),
+    lastOrderNo: document.getElementById("last-order-no"),
+    lastOrderDetail: document.getElementById("last-order-detail"),
+    lastOrderDismiss: document.getElementById("last-order-dismiss"),
     toast: document.getElementById("toast")
   };
 
@@ -39,6 +48,10 @@
 
   function slug(text) {
     return String(text).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  function key(label) {
+    return String(label).trim().toLowerCase();
   }
 
   /* Give every step and option an id so menu.js only needs labels.
@@ -72,6 +85,26 @@
     return Array.isArray(v) ? v.slice() : [v];
   }
 
+  function isSoldOut(label) {
+    return Boolean(state.status.soldOut[key(label)]);
+  }
+
+  /* A drink is out if it's listed, or if a required step has nothing left. */
+  function drinkAvailable(cat) {
+    if (isSoldOut(cat.name)) return false;
+    return cat.steps.every(function (s) {
+      return !s.required || s.options.some(function (o) { return !isSoldOut(o.label); });
+    });
+  }
+
+  function isClosed() {
+    return Boolean(MENU.outlet.closed) || !state.status.accepting;
+  }
+
+  function closedMessage() {
+    return state.status.message || MENU.outlet.closedMessage || "Online ordering is paused right now.";
+  }
+
   /* Everything still blocking payment, in the order the student meets it. */
   function missingItems() {
     if (!state.category) return [];
@@ -100,8 +133,17 @@
     return /^https?:\/\//.test(link) ? link : "";
   }
 
-  function newOrderNo() {
-    return String(1000 + Math.floor(Math.random() * 9000));
+  function logUrl() {
+    var url = MENU.orderLogUrl || "";
+    return /^https:\/\//.test(url) ? url : "";
+  }
+
+  /* fetch with a deadline, so a stalled network never leaves a student stuck. */
+  function fetchWithin(url, options, ms) {
+    var controller = window.AbortController ? new AbortController() : null;
+    var timer = window.setTimeout(function () { if (controller) controller.abort(); }, ms);
+    return fetch(url, Object.assign({}, options, controller ? { signal: controller.signal } : {}))
+      .finally(function () { window.clearTimeout(timer); });
   }
 
   function toast(message) {
@@ -110,7 +152,55 @@
     window.clearTimeout(toast._t);
     toast._t = window.setTimeout(function () {
       el.toast.classList.remove("toast--up");
-    }, 3200);
+    }, 4200);
+  }
+
+  /* ---------- hours ---------- */
+
+  function renderHours() {
+    var days = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    var today = (MENU.outlet.schedule || {})[days[new Date().getDay()]];
+    el.hours.textContent = today ? "Today: " + today : "Closed today";
+    el.footHours.textContent = MENU.outlet.hoursSummary || "";
+  }
+
+  /* ---------- live controls from the Sheet ---------- */
+
+  function loadStatus() {
+    var url = logUrl();
+    if (!url) return;
+    fetchWithin(url + "?action=status", {}, 8000)
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!s || s.ok !== true) return;
+        state.status.accepting = s.accepting !== false;
+        state.status.message = String(s.message || "");
+        state.status.soldOut = {};
+        (s.soldOut || []).forEach(function (x) { state.status.soldOut[key(x)] = true; });
+        applyStatus();
+      })
+      .catch(function () { /* offline or an older script: stay open */ });
+  }
+
+  function applyStatus() {
+    el.closed.hidden = !isClosed();
+    el.closed.textContent = isClosed() ? closedMessage() : "";
+
+    // drop any pick that has since sold out
+    if (state.category) {
+      state.category.steps.forEach(function (step) {
+        selectedIds(step).forEach(function (id) {
+          var o = optionById(step, id);
+          if (o && isSoldOut(o.label)) toggle(step, o, true);
+        });
+      });
+    }
+
+    var chosen = state.category && state.category.id;
+    renderPlates();
+    if (chosen) markChosenPlate(chosen);
+    renderBuilder();
+    renderPass();
   }
 
   /* ---------- drink plates ---------- */
@@ -145,21 +235,24 @@
       grid.setAttribute("aria-label", group.name);
 
       group.items.forEach(function (cat) {
+        var available = drinkAvailable(cat);
         var b = document.createElement("button");
         b.type = "button";
         b.className = "plate";
         b.setAttribute("aria-pressed", "false");
         b.dataset.id = cat.id;
+        b.disabled = !available;
 
         b.innerHTML =
           '<span class="plate__serial"></span>' +
           '<span class="plate__name"></span>' +
           '<span class="plate__blurb"></span>' +
-          '<span class="plate__from">from ' + money(cat.price || 0) + "</span>";
+          '<span class="plate__from"></span>';
 
         b.querySelector(".plate__serial").textContent = cat.serial || "";
         b.querySelector(".plate__name").textContent = cat.name;
         b.querySelector(".plate__blurb").textContent = cat.blurb || "";
+        b.querySelector(".plate__from").textContent = available ? "from " + money(cat.price || 0) : "Sold out today";
 
         b.addEventListener("click", function () { chooseCategory(cat.id); });
         grid.appendChild(b);
@@ -170,18 +263,21 @@
     });
   }
 
-  function chooseCategory(id) {
-    var cat = MENU.categories.filter(function (c) { return c.id === id; })[0];
-    if (!cat) return;
-
-    state.category = cat;
-    state.picks = {};
-    state.orderNo = newOrderNo();
-    // the name carries over between drinks — it's the same student
-
+  function markChosenPlate(id) {
     Array.prototype.forEach.call(el.plates.querySelectorAll(".plate"), function (node) {
       node.setAttribute("aria-pressed", String(node.dataset.id === id));
     });
+  }
+
+  function chooseCategory(id) {
+    var cat = MENU.categories.filter(function (c) { return c.id === id; })[0];
+    if (!cat || !drinkAvailable(cat)) return;
+
+    state.category = cat;
+    state.picks = {};
+    // the name carries over between drinks — it's the same student
+
+    markChosenPlate(id);
 
     el.workbench.hidden = false;
     el.workbench.classList.remove("workbench--issued");
@@ -250,17 +346,23 @@
 
     step.options.forEach(function (opt) {
       var on = chosen.indexOf(opt.id) !== -1;
+      var out = isSoldOut(opt.label);
       var chip = document.createElement("button");
       chip.type = "button";
       chip.className = "chip";
       chip.setAttribute("aria-pressed", String(on));
-      if (atMax && !on) chip.disabled = true;
+      if (out || (atMax && !on)) chip.disabled = true;
 
       var label = document.createElement("span");
       label.textContent = opt.label;
       chip.appendChild(label);
 
-      if (opt.price) {
+      if (out) {
+        var so = document.createElement("span");
+        so.className = "chip__soldout";
+        so.textContent = "Sold out";
+        chip.appendChild(so);
+      } else if (opt.price) {
         var price = document.createElement("span");
         price.className = "chip__price";
         price.textContent = "+" + money(opt.price);
@@ -311,7 +413,7 @@
     return wrap;
   }
 
-  function toggle(step, opt) {
+  function toggle(step, opt, quiet) {
     if (step.type === "multi") {
       var list = selectedIds(step);
       var at = list.indexOf(opt.id);
@@ -327,6 +429,7 @@
       if (!state.picks[step.id]) delete state.picks[step.id];
     }
 
+    if (quiet) return;
     renderBuilder();
     renderPass();
   }
@@ -390,9 +493,11 @@
     }
 
     el.passTotal.textContent = state.category ? money(total()) : "—";
-    el.passSerial.textContent = state.category
-      ? state.category.serial + " · Order #" + state.orderNo
-      : "— — — —";
+    if (!state.sending) {
+      el.passSerial.textContent = state.category
+        ? state.category.serial + " · order number comes when you pay"
+        : "— — — —";
+    }
 
     renderCup();
     renderHandoff();
@@ -430,14 +535,15 @@
   }
 
   function renderHandoff() {
+    if (state.sending) return;   // the Sending… state owns the button
+
     var missing = missingItems();
-    var closed = Boolean(MENU.outlet.closed);
-    var ready = Boolean(state.category) && missing.length === 0 && !closed;
+    var ready = Boolean(state.category) && missing.length === 0 && !isClosed();
 
     el.pay.disabled = !ready;
 
-    if (closed) {
-      el.warn.textContent = "Online ordering is paused while the Outlet is closed.";
+    if (isClosed()) {
+      el.warn.textContent = closedMessage();
       el.warn.className = "handoff__warn";
     } else if (!state.category) {
       el.warn.textContent = "Pick a drink to start.";
@@ -455,30 +561,22 @@
 
   /* ---------- paying ---------- */
 
-  /* Fire-and-forget: survives the page navigating away to Givebacks. */
-  function logOrder() {
-    var url = MENU.orderLogUrl || "";
-    if (!/^https:\/\//.test(url)) return;
-    var body = JSON.stringify({
-      orderNo: state.orderNo,
-      name: state.name.trim(),
-      drink: state.category.name,
-      total: Number(total().toFixed(2)),
-      choices: choiceList()
-    });
-    try {
-      fetch(url, {
-        method: "POST",
-        mode: "no-cors",
-        keepalive: true,
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: body
-      });
-    } catch (e) { /* logging must never block paying */ }
+  function setSending(on, label) {
+    state.sending = on;
+    if (on) {
+      el.pay.disabled = true;
+      el.payLabel.textContent = label;
+      el.warn.textContent = "Don't close this page.";
+      el.warn.className = "handoff__warn handoff__warn--ok";
+    } else {
+      renderPass();
+    }
   }
 
+  /* The order is logged first; the student only goes to Givebacks once the
+     Sheet confirms it has the order, so no payment ever arrives without one. */
   function pay() {
-    if (el.pay.disabled || !state.category) return;
+    if (state.sending || el.pay.disabled || !state.category) return;
     var amount = total();
     var link = payLinkFor(amount);
 
@@ -487,27 +585,102 @@
       return;
     }
 
-    logOrder();
-    window.location.href = link;
+    var url = logUrl();
+    if (!url) { window.location.href = link; return; }   // logging turned off
+
+    var cat = state.category;
+    var name = state.name.trim();
+    setSending(true, "Sending your order…");
+
+    fetchWithin(url, {
+      method: "POST",
+      // a plain string body keeps this a "simple" request Google accepts cross-site
+      body: JSON.stringify({ name: name, drink: cat.name, total: Number(amount.toFixed(2)), choices: choiceList() })
+    }, 15000)
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res && res.ok) {
+          var no = res.orderNo != null ? String(res.orderNo) : String(1000 + Math.floor(Math.random() * 9000));
+          rememberOrder({ no: no, drink: cat.name, total: amount, name: name });
+          el.passSerial.textContent = cat.serial + " · Order #" + no;
+          el.payLabel.textContent = "Order #" + no + " sent. Opening Givebacks…";
+          window.setTimeout(function () { window.location.href = link; }, 900);
+          return;
+        }
+        if (res && res.error === "closed") {
+          state.status.accepting = false;
+          state.status.message = String(res.message || "");
+          setSending(false);
+          applyStatus();
+          toast(closedMessage());
+          return;
+        }
+        if (res && res.error === "soldout") {
+          (res.items || []).forEach(function (x) { state.status.soldOut[key(x)] = true; });
+          setSending(false);
+          applyStatus();
+          toast("Sorry, " + (res.items || []).join(", ") + " just sold out. Pick something else.");
+          return;
+        }
+        setSending(false);
+        toast("Couldn't send your order. Please try again.");
+      })
+      .catch(function () {
+        setSending(false);
+        toast("Couldn't reach the Outlet. Check your connection and try again.");
+      });
+  }
+
+  /* ---------- the student's last order ---------- */
+
+  function rememberOrder(order) {
+    try {
+      localStorage.setItem(LAST_ORDER_KEY, JSON.stringify(Object.assign({ at: Date.now() }, order)));
+    } catch (e) { /* private mode: the pass still showed the number */ }
+  }
+
+  function showLastOrder() {
+    var order = null;
+    try { order = JSON.parse(localStorage.getItem(LAST_ORDER_KEY) || "null"); } catch (e) { order = null; }
+    var fresh = order && order.at &&
+      Date.now() - order.at < LAST_ORDER_HOURS * 3600 * 1000 &&
+      new Date(order.at).toDateString() === new Date().toDateString();
+    if (!fresh) { el.lastOrder.hidden = true; return; }
+
+    el.lastOrderNo.textContent = "#" + order.no;
+    el.lastOrderDetail.textContent = order.drink + " · " + money(Number(order.total) || 0) + " · under " + (order.name || "your name");
+    el.lastOrder.hidden = false;
+  }
+
+  function dismissLastOrder() {
+    try { localStorage.removeItem(LAST_ORDER_KEY); } catch (e) { /* nothing to clear */ }
+    el.lastOrder.hidden = true;
   }
 
   /* ---------- boot ---------- */
 
   function boot() {
-    el.hours.textContent = MENU.outlet.hours || "";
     el.pickup.textContent = MENU.outlet.pickup || "";
     document.title = MENU.outlet.name + " — Order Online";
 
     normalizeMenu();
+    renderHours();
     renderPlates();
     renderPass();
-
-    if (MENU.outlet.closed) {
-      el.closed.hidden = false;
-      el.closed.textContent = MENU.outlet.closedMessage || "The Outlet is closed right now.";
-    }
+    applyStatus();
+    showLastOrder();
+    loadStatus();
 
     el.pay.addEventListener("click", pay);
+    el.lastOrderDismiss.addEventListener("click", dismissLastOrder);
+
+    // Coming back from Givebacks with the Back button restores the old page;
+    // clear the Sending… state and show the order number again.
+    window.addEventListener("pageshow", function (e) {
+      if (!e.persisted) return;
+      setSending(false);
+      showLastOrder();
+    });
   }
 
   boot();

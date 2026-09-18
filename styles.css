@@ -223,6 +223,60 @@ body {
 .plate[aria-pressed="true"] .plate__blurb,
 .plate[aria-pressed="true"] .plate__from { color: var(--ink-on-navy-2); }
 
+.plate:disabled { opacity: 0.5; cursor: not-allowed; }
+.plate:disabled:hover { background: var(--card); border-color: var(--line); }
+
+.chip__soldout {
+  font-family: var(--font-num);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* ---------- the student's last order, shown when they come back ---------- */
+
+.last-order {
+  margin-top: calc(var(--step) * 1.2);
+  padding: 0.85rem var(--pad) 0.95rem;
+  background: var(--card);
+  border: 1px solid var(--navy-900);
+  box-shadow: var(--lift);
+}
+
+.last-order__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.last-order__head {
+  margin: 0;
+  font-stretch: 112%;
+  font-weight: 800;
+  font-size: 1.1rem;
+  color: var(--navy-900);
+}
+.last-order__head .num { font-size: 1.2rem; }
+
+.last-order__dismiss {
+  min-height: 2.75rem;
+  padding: 0 0.25rem;
+  background: none;
+  border: 0;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.85rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.last-order__dismiss:hover { color: var(--ink); }
+
+.last-order__detail { margin: 0.2rem 0 0; font-size: 0.95rem; }
+.last-order__note { margin: 0.35rem 0 0; font-size: 0.8rem; color: var(--ink-3); max-width: 52ch; }
+
 .closed-banner {
   margin: var(--step) 0 0;
   padding: 0.8rem 1rem;

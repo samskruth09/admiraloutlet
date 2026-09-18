@@ -123,12 +123,21 @@ const SODA_SYRUPS = [
 const MENU = {
   outlet: {
     name: "Admiral Outlet",
-    // Shown under the wordmark. Keep it short.
-    hours: "Open 7:15–7:45 AM · Passing periods · Lunch A/B",
-    pickup: "Pick up at the Outlet counter, main hall",
-    // Set to true when the Outlet is closed and ordering should be paused.
+    // Today's hours show under the wordmark. Days left out count as closed.
+    schedule: {
+      mon: "7:30–8:20 AM · closed at lunch",
+      tue: "7:30–8:20 AM · all lunches",
+      wed: "7:30–8:40 AM · all lunches",
+      thu: "7:30–8:20 AM · all lunches",
+      fri: "7:30–8:20 AM · all lunches",
+    },
+    // The full week, shown at the bottom of the page.
+    hoursSummary: "Mornings 7:30–8:20 AM (Wednesdays until 8:40) and all lunches. Closed Monday lunch.",
+    pickup: "Pick up at the Admiral Outlet counter.",
+    // Emergency stop that needs a code push. For day-to-day pausing, use the
+    // "Online ordering on" checkbox in the Controls tab of the order-log Sheet.
     closed: false,
-    closedMessage: "The Outlet is closed right now. Ordering reopens tomorrow at 7:15 AM.",
+    closedMessage: "Online ordering is paused right now. Order at the counter!",
   },
 
   /* Drinks show on the page grouped by  section , in this order. */
